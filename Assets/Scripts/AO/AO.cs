@@ -7,21 +7,20 @@ public class AO : MonoBehaviour
 {
     public Camera cam;
     // obejct list parent
-    public GameObject objectList;
-    // map size  = kernelSize * kernelSize
-    public int kernelSize = 8;
+    //public GameObject objectList;
+    public Material renderMat;
 
-    private Texture2D kernelMap;
-    private List<Vector3> kernel;
-    private List<Material> mats;
+    private List<Vector4> kernel;
     // Start is called before the first frame update
     void Start()
     {
-        // generate random noise
-        kernel = new List<Vector3>();
-        int mapSize = kernelSize * kernelSize;
-        kernelMap = new Texture2D(kernelSize, kernelSize);
+        cam.depthTextureMode = DepthTextureMode.DepthNormals;
 
+        // generate random noise
+        kernel = new List<Vector4>();
+
+        int kernelSize = 8;
+        int mapSize = 64;
         for (int i = 0; i < mapSize; i++)
         {
             float angle = UnityEngine.Random.Range(0.0f, 1.0f) * Mathf.PI * 2;
@@ -33,50 +32,81 @@ public class AO : MonoBehaviour
             scale = Mathf.Lerp(0.1f, 1.0f, scale * scale);
             v3 *= scale;
             kernel.Add(v3);
+        }
 
+         Texture2D noiseMap = new Texture2D(8, 8, TextureFormat.RGBAFloat, false);
+        for(int i = 0; i < 16; i++)
+        {
             int px = i % kernelSize;
             int py = i / kernelSize;
-            kernelMap.SetPixel(px, py, new Color(v3.x, v3.y, v3.z));
+            float angle = UnityEngine.Random.Range(0.0f, 1.0f) * Mathf.PI * 2;
+            float r = Mathf.Sqrt(UnityEngine.Random.Range(0.0f, 1.0f));
+            //print(r * Mathf.Cos(angle)+"   "+ r * Mathf.Sin(angle)); 
+            Vector3 noise = new Vector3(r * Mathf.Cos(angle), r * Mathf.Sin(angle), 0);
+            noise.Normalize();
+            noiseMap.SetPixel(px, py, new Color(noise.x, noise.y, 0));
+            //print(noiseMap.GetPixel(px, py));
         }
+        noiseMap.Apply();
 
+
+        renderMat.SetTexture("_RandomNoise", noiseMap);
+        renderMat.SetVectorArray("_Samples", kernel);
+        renderMat.SetFloat("_SampleSize", mapSize);
         // get child material under objectList
-        Renderer[] renderers = objectList.transform.GetComponentsInChildren<Renderer>();
-        foreach (Renderer renderer in renderers)
-        {
-            Material mat = renderer.sharedMaterial;
-            mat.SetTexture("_RandomNoise", kernelMap);
-            mats.Add(mat);
-        }
-        renderers = null;
-        GC.Collect();
+        //mats = new List<Material>();
+        //Renderer[] renderers = objectList.transform.GetComponentsInChildren<Renderer>();
+        //foreach (Renderer renderer in renderers)
+        //{
+        //    Material mat = renderer.sharedMaterial;
+        //    mats.Add(mat);
+        //}
+        //renderers = null;
+        //GC.Collect();
     }
 
     // Update is called once per frame
     void Update()
     {
-        ssao();
+        //ssao();
     }
 
-    void ssao()
+    private void OnRenderImage(RenderTexture source, RenderTexture destination)
     {
-        // generate depthnormal texture
-        GameObject tmpCamObject = GameObject.Instantiate(cam.gameObject);
-        Camera tmpCam = tmpCamObject.GetComponent<Camera>();
-        tmpCam.depthTextureMode = DepthTextureMode.DepthNormals;
-
-        RenderTexture renderTexture = RenderTexture.GetTemporary(tmpCam.pixelWidth, tmpCam.pixelHeight);
-        tmpCam.targetTexture = renderTexture;
-        tmpCam.Render();
-
-        // set depthnormal texture to render object
-        foreach (Material mat in mats)
-        {
-            mat.SetTexture("_DepthNormal", renderTexture);
-            //mat.SetTexture("_RandomNoise", kernelMap);
-        }
-
-        // clean temporary
-        Destroy(tmpCamObject);
-        RenderTexture.ReleaseTemporary(renderTexture);
+        Graphics.Blit(source, destination, renderMat);
+        //Graphics.Blit(source, destination, mat);
+        //foreach (Material mat in mats)
+        //{
+        //    //mat.SetTexture("_DepthNormal", _TmpTextrue);
+        //    mat.SetTexture("_RandomNoise", kernelMap);
+        //    mat.SetFloat("_kernelSize", kernelSize);
+        //    //mat.SetTexture("_RandomNoise", kernelMap);
+        //    break;
+        //}
     }
+
+    //void ssao()
+    //{
+    //    // generate depthnormal texture
+    //    GameObject tmpCamObject = GameObject.Instantiate(cam.gameObject);
+    //    Camera tmpCam = tmpCamObject.GetComponent<Camera>();
+    //    tmpCam.depthTextureMode = DepthTextureMode.DepthNormals;
+
+    //    //RenderTexture renderTexture = RenderTexture.GetTemporary(tmpCam.pixelWidth, tmpCam.pixelHeight);
+    //    tmpCam.targetTexture = _TmpTextrue;
+    //    tmpCam.Render();
+
+    //    // set depthnormal texture to render object
+    //    foreach (Material mat in mats)
+    //    {
+    //        mat.SetTexture("_DepthNormal", _TmpTextrue);
+    //        mat.SetTexture("_RandomNoise", kernelMap);
+    //        mat.SetFloat("_kernelSize", kernelSize);
+    //        //mat.SetTexture("_RandomNoise", kernelMap);
+    //    }
+
+    //    // clean temporary
+    //    Destroy(tmpCamObject);
+    //    //RenderTexture.ReleaseTemporary(renderTexture);
+    //}
 }
