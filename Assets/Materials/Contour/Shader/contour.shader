@@ -1,84 +1,148 @@
-﻿Shader "MyShader/countour"
+﻿//
+// KinoContour - Contour line effect
+//
+// Copyright (C) 2015 Keijiro Takahashi
+//
+// Permission is hereby granted, free of charge, to any person obtaining a copy of
+// this software and associated documentation files (the "Software"), to deal in
+// the Software without restriction, including without limitation the rights to
+// use, copy, modify, merge, publish, distribute, sublicense, and/or sell copies of
+// the Software, and to permit persons to whom the Software is furnished to do so,
+// subject to the following conditions:
+//
+// The above copyright notice and this permission notice shall be included in all
+// copies or substantial portions of the Software.
+//
+// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS
+// FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR
+// COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER
+// IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN
+// CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+//
+Shader "MyShader/Contour"
 {
     Properties
     {
-        _MainTex("Texture", 2D) = "white" {}
-        _MyCameraPosition("Camera Potition", Vector) = (0, 0, 0, 0)
-        _Threshold("Contour Threshold", Float) = 0.5
+        _MainTex("", 2D) = "" {}
     }
+
+    CGINCLUDE
+
+#include "UnityCG.cginc"
+
+    sampler2D _MainTex;
+    float2 _MainTex_TexelSize;
+
+    sampler2D_float _CameraDepthTexture;
+    sampler2D _CameraGBufferTexture2;
+
+    half4 _Color;
+    half4 _Background;
+
+    half _Threshold;
+    float _InvRange;
+
+    half _ColorSensitivity;
+    half _DepthSensitivity;
+    half _NormalSensitivity;
+    float _InvFallOff;
+
+    half4 frag(v2f_img i) : SV_Target
+    {
+        // Source color
+        half4 c0 = tex2D(_MainTex, i.uv);
+
+        // _MainTex_TexelSize = Vector4(1 / width, 1 / height, width, height)
+
+        // Four sample points of the roberts cross operator
+        float2 uv0 = i.uv;                                   // TL top left
+        float2 uv1 = i.uv + _MainTex_TexelSize.xy;           // BR bottom right
+        float2 uv2 = i.uv + float2(_MainTex_TexelSize.x, 0); // TR top right
+        float2 uv3 = i.uv + float2(0, _MainTex_TexelSize.y); // BL bottom left
+
+        half edge = 0;
+
+    #ifdef _CONTOUR_COLOR
+
+        // Color samples
+        float3 c1 = tex2D(_MainTex, uv1).rgb;
+        float3 c2 = tex2D(_MainTex, uv2).rgb;
+        float3 c3 = tex2D(_MainTex, uv3).rgb;
+
+        // Roberts cross operator
+        float3 cg1 = c1 - c0;
+        float3 cg2 = c3 - c2;
+        float cg = sqrt(dot(cg1, cg1) + dot(cg2, cg2));
+
+        edge = cg * _ColorSensitivity;
+
+    #endif
+
+    #ifdef _CONTOUR_DEPTH
+
+        // Depth samples
+        float zs0 = SAMPLE_DEPTH_TEXTURE(_CameraDepthTexture, uv0);
+        float zs1 = SAMPLE_DEPTH_TEXTURE(_CameraDepthTexture, uv1);
+        float zs2 = SAMPLE_DEPTH_TEXTURE(_CameraDepthTexture, uv2);
+        float zs3 = SAMPLE_DEPTH_TEXTURE(_CameraDepthTexture, uv3);
+
+        // Calculate fall-off parameter from the depth of the nearest point
+        float zm = min(min(min(zs0, zs1), zs2), zs3);
+        float falloff = 1.0 - saturate(LinearEyeDepth(zm) * _InvFallOff);
+
+        // Convert to linear depth values.
+        float z0 = Linear01Depth(zs0);
+        float z1 = Linear01Depth(zs1);
+        float z2 = Linear01Depth(zs2);
+        float z3 = Linear01Depth(zs3);
+
+        // Roberts cross operator
+        float zg1 = z1 - z0;
+        float zg2 = z3 - z2;
+        float zg = sqrt(zg1 * zg1 + zg2 * zg2);
+
+        edge = max(edge, zg * falloff * _DepthSensitivity / Linear01Depth(zm));
+
+    #endif
+
+    #ifdef _CONTOUR_NORMAL
+
+        // Normal samples from the G-buffer
+        float3 n0 = tex2D(_CameraGBufferTexture2, uv0).rgb;
+        float3 n1 = tex2D(_CameraGBufferTexture2, uv1).rgb;
+        float3 n2 = tex2D(_CameraGBufferTexture2, uv2).rgb;
+        float3 n3 = tex2D(_CameraGBufferTexture2, uv3).rgb;
+
+        // Roberts cross operator
+        float3 ng1 = n1 - n0;
+        float3 ng2 = n3 - n2;
+        float ng = sqrt(dot(ng1, ng1) + dot(ng2, ng2));
+
+        edge = max(edge, ng * _NormalSensitivity);
+
+    #endif
+
+        // Thresholding
+        edge = saturate((edge - _Threshold) * _InvRange);
+
+        half3 cb = lerp(c0.rgb, _Background.rgb, _Background.a);
+        half3 co = lerp(cb, _Color.rgb, edge * _Color.a);
+        return half4(co, c0.a);
+    }
+
+    ENDCG
     SubShader
     {
-        Tags { "RenderType" = "Opaque" }
-        LOD 100
-
         Pass
         {
+            ZTest Always Cull Off ZWrite Off
             CGPROGRAM
-            #pragma vertex vert
+            #pragma vertex vert_img
             #pragma fragment frag
-            // make fog work
-
-            #include "UnityCG.cginc"
-
-            struct appdata
-            {
-                float4 vertex : POSITION;
-                float3 normal : NORMAL;
-                float2 uv : TEXCOORD0;
-            };
-
-            struct v2f
-            {
-                float2 uv : TEXCOORD0;
-                float4 vertex : SV_POSITION;
-                float3 contourParam : TEXCOORD1;
-            };
-
-            sampler2D _MainTex;
-            float _Threshold;
-            float4 _MainTex_ST;
-            float4 _MyCameraPosition;
-
-            v2f vert(appdata v)
-            {
-                v2f o;
-                o.vertex = UnityObjectToClipPos(v.vertex);
-                o.uv = TRANSFORM_TEX(v.uv, _MainTex);
-
-                // inverse view direction
-                float3 viewDir = normalize(_MyCameraPosition - v.vertex);
-                // world normal
-                float3 worldNormal = UnityObjectToWorldNormal(v.normal);
-
-                o.contourParam = float3(1, 1, 1);
-                // x : normal_dot_view
-                // y : t_kr
-                // z : t_dwkr
-                float normal_dot_view = dot(worldNormal, viewDir);
-                o.contourParam.x = abs(normal_dot_view);
-                //if (normal_dot_view >= 0)
-                //{
-                //    o.contourParam.x = normal_dot_view;
-                //    if (normal_dot_view > _Threshold)
-                //    {
-                //        // calculate
-                //        ;
-                //    }
-                //}
-
-                return o;
-            }
-
-            fixed4 frag(v2f i) : SV_Target
-            {
-                // sample the texture
-                fixed4 col = fixed4(0,0,0,0);
-                if (i.contourParam.x < _Threshold)
-                    col = fixed4(1, 0, 0, 1);
-                else
-                    col = tex2D(_MainTex, i.uv);
-                return col;
-            }
+            #pragma multi_compile _ _CONTOUR_COLOR
+            #pragma multi_compile _ _CONTOUR_DEPTH
+            #pragma multi_compile _ _CONTOUR_NORMAL
             ENDCG
         }
     }
