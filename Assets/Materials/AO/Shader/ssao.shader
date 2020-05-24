@@ -4,7 +4,8 @@
 	{
 		_MainTex("_MainTex", 2D) = "white" {}
 		_RandomNoise("_RandomNoise", 2D) = "white" {}
-		_Radius("_Radius", Float) = 1
+		_Radius("_Radius", Float) = 1.0
+		_BlurSize("_BlurSize", Float) = 1.0
 	}
 
 	CGINCLUDE
@@ -24,6 +25,7 @@
 		float3 scrPos : TEXCOORD1;
 	};
 
+	float4 _MainTex_TexelSize;
 	sampler2D _MainTex;
 	sampler2D _RandomNoise;
 
@@ -32,7 +34,9 @@
 
 	uniform float _SampleSize;
 	uniform float4 _Samples[64];
-	uniform float _Radius;
+
+	float _Radius;
+	float _BlurSize;
 	sampler2D _AOTex;
 
 	v2f vert(appdata v)
@@ -43,7 +47,6 @@
 		// unity uv : 0 ~ 1
 		o.uv = v.uv;
 		o.scrPos = ComputeScreenPos(o.vertex);
-		//o.scrPos = ComputeScreenPos(o.vertex);
 		return o;
 	}
 
@@ -60,13 +63,12 @@
 		float depth;
 		float3 normal;
 		DecodeDepthNormal(depth_normal, depth, normal);
+		float3 randomVec = float3(tex2D(_RandomNoise, IN.scrPos.xy * _MainTex_TexelSize.zw ).xy, 0);
+		//float3 randomVec = float3(0, 0, 1);
 
-		//randomVec 影響結果 所以拿掉
-		//float3 randomVec = float3(tex2D(_RandomNoise, IN.scrPos.xy).xy, 0);
-
-		//normal = normal * 2 - 1;
 		// Get the depth value for this pixel
 		float z = depth;
+		//float z = (1 - Linear01Depth(depth)) * 2 - 1;
 		// Get x/w and y/w from the viewport position
 		float x = IN.scrPos.x * 2 - 1;
 		float y = (1 - IN.scrPos.y) * 2 - 1;
@@ -76,31 +78,29 @@
 		// Divide by w to get the view-space position
 		float3 origin = vPositionVS.xyz / vPositionVS.w;
 
-		//可以得到正確的screen space座標
+		////可以得到正確的screen space座標
 		//float4 proj = mul(unity_CameraProjection, float4(origin, 1));
 		//proj /= proj.w;
 		//proj = (proj + 1) / 2;
 		//proj.y = 1 - proj.y;
 		//depth_normal = tex2D(_CameraDepthNormalsTexture, proj.xy);
-		//return depth_normal;
 
 		// create ntb matrix
-		//float3 tangent = normalize(randomVec - normal * dot(randomVec, normal));
-		//float3 bitangent = cross(normal, tangent);
-		//float3x3 TBN;
-		//TBN[0] = tangent;
-		//TBN[1] = bitangent;
-		//TBN[2] = normal;
+		//normal = normal * 2 - 1;
+		float3 tangent = normalize(randomVec - normal * dot(randomVec, normal));
+		float3 bitangent = cross(normal, tangent);
+		float3x3 TBN;
+		TBN[0] = tangent;
+		TBN[1] = bitangent;
+		TBN[2] = normal;
+
+		//TBN = transpose(TBN);
 
 		float occlusion = 0.0;
 		for (int i = 0; i < _SampleSize; ++i)
 		{
-			//float3 sp = mul(TBN, _Samples[i].xyz);
-			float3 sp = _Samples[i].xyz;
-
-			if (dot(sp, normal) < 0)
-				continue;
-			//sp = -sp;
+			//float3 sp = mul(_Samples[i].xyz, TBN);
+			float3 sp = mul(TBN, _Samples[i].xyz);
 
 			sp = origin + sp * _Radius;
 
@@ -115,11 +115,8 @@
 			float4 rcdn = tex2D(_CameraDepthNormalsTexture, rclipPos.xy);
 			DecodeDepthNormal(rcdn, sampleDepth, sampleNormal);
 
-			//float range = abs(randomDepth - depth);
-			//float ao = randomDepth;
-			//occlusion += ao * range;
 			float rangeCheck = abs(depth - sampleDepth) < _Radius ? 1.0 : 0.0;
-			occlusion += (sampleDepth < depth ? 1.0 : 0.0) * rangeCheck;
+			occlusion += (sampleDepth <= sp.z * _ProjectionParams.z ? 1.0 : 0.0) * rangeCheck;
 		}
 
 		occlusion = 1.0 - occlusion / _SampleSize;
@@ -127,8 +124,6 @@
 
 		return occlusion;
 	}
-
-	float4 _MainTex_TexelSize;
 
 	// https://blog.csdn.net/puppet_master/article/details/82929708
 	float3 GetNormal(float2 uv)
@@ -142,53 +137,80 @@
 		return smoothstep(0.8, 1.0, dot(normal1, normal2));
 	}
 
+	static const float2 kernel[8] = {
+		float2(1, 0),
+		float2(1, 1),
+		float2(0, 1),
+		float2(-1, 1),
+		float2(-1, 0),
+		float2(-1, -1),
+		float2(0, -1),
+		float2(1, -1)
+	};
+
 	fixed4 frag_ao_blur(v2f i) : SV_Target
 	{
-		float2 delta = _MainTex_TexelSize.xy * 1;
+		float2 delta = _MainTex_TexelSize.xy * _BlurSize;
+		float4 blur = 0;
+		//_BlurSize
 
-		float2 uv = i.uv;
-		float2 uv0a = i.uv - delta;
-		float2 uv0b = i.uv + delta;
-		float2 uv1a = i.uv - 2.0 * delta;
-		float2 uv1b = i.uv + 2.0 * delta;
-		float2 uv2a = i.uv - 3.0 * delta;
-		float2 uv2b = i.uv + 3.0 * delta;
+		blur += tex2D(_MainTex, i.uv);
+		blur += tex2D(_MainTex, i.uv + delta * kernel[0]);
+		blur += tex2D(_MainTex, i.uv + delta * kernel[1]);
+		blur += tex2D(_MainTex, i.uv + delta * kernel[2]);
+		blur += tex2D(_MainTex, i.uv + delta * kernel[3]);
+		blur += tex2D(_MainTex, i.uv + delta * kernel[4]);
+		blur += tex2D(_MainTex, i.uv + delta * kernel[5]);
+		blur += tex2D(_MainTex, i.uv + delta * kernel[6]);
+		blur += tex2D(_MainTex, i.uv + delta * kernel[7]);
 
-		float3 normal = GetNormal(uv);
-		float3 normal0a = GetNormal(uv0a);
-		float3 normal0b = GetNormal(uv0b);
-		float3 normal1a = GetNormal(uv1a);
-		float3 normal1b = GetNormal(uv1b);
-		float3 normal2a = GetNormal(uv2a);
-		float3 normal2b = GetNormal(uv2b);
+		return blur / 9;
 
-		fixed4 col = tex2D(_MainTex, uv);
-		fixed4 col0a = tex2D(_MainTex, uv0a);
-		fixed4 col0b = tex2D(_MainTex, uv0b);
-		fixed4 col1a = tex2D(_MainTex, uv1a);
-		fixed4 col1b = tex2D(_MainTex, uv1b);
-		fixed4 col2a = tex2D(_MainTex, uv2a);
-		fixed4 col2b = tex2D(_MainTex, uv2b);
+		//float2 delta = _MainTex_TexelSize.xy * 1;
 
-		half w = 0.37004405286;
-		half w0a = CompareNormal(normal, normal0a) * 0.31718061674;
-		half w0b = CompareNormal(normal, normal0b) * 0.31718061674;
-		half w1a = CompareNormal(normal, normal1a) * 0.19823788546;
-		half w1b = CompareNormal(normal, normal1b) * 0.19823788546;
-		half w2a = CompareNormal(normal, normal2a) * 0.11453744493;
-		half w2b = CompareNormal(normal, normal2b) * 0.11453744493;
+		//float2 uv = i.uv;
+		//float2 uv0a = i.uv - delta;
+		//float2 uv0b = i.uv + delta;
+		//float2 uv1a = i.uv - 2.0 * delta;
+		//float2 uv1b = i.uv + 2.0 * delta;
+		//float2 uv2a = i.uv - 3.0 * delta;
+		//float2 uv2b = i.uv + 3.0 * delta;
 
-		half3 result;
-		result = w * col.rgb;
-		result += w0a * col0a.rgb;
-		result += w0b * col0b.rgb;
-		result += w1a * col1a.rgb;
-		result += w1b * col1b.rgb;
-		result += w2a * col2a.rgb;
-		result += w2b * col2b.rgb;
+		//float3 normal = GetNormal(uv);
+		//float3 normal0a = GetNormal(uv0a);
+		//float3 normal0b = GetNormal(uv0b);
+		//float3 normal1a = GetNormal(uv1a);
+		//float3 normal1b = GetNormal(uv1b);
+		//float3 normal2a = GetNormal(uv2a);
+		//float3 normal2b = GetNormal(uv2b);
 
-		result /= w + w0a + w0b + w1a + w1b + w2a + w2b;
-		return fixed4(result, 1.0);
+		//fixed4 col = tex2D(_MainTex, uv);
+		//fixed4 col0a = tex2D(_MainTex, uv0a);
+		//fixed4 col0b = tex2D(_MainTex, uv0b);
+		//fixed4 col1a = tex2D(_MainTex, uv1a);
+		//fixed4 col1b = tex2D(_MainTex, uv1b);
+		//fixed4 col2a = tex2D(_MainTex, uv2a);
+		//fixed4 col2b = tex2D(_MainTex, uv2b);
+
+		//half w = 0.37004405286;
+		//half w0a = CompareNormal(normal, normal0a) * 0.31718061674;
+		//half w0b = CompareNormal(normal, normal0b) * 0.31718061674;
+		//half w1a = CompareNormal(normal, normal1a) * 0.19823788546;
+		//half w1b = CompareNormal(normal, normal1b) * 0.19823788546;
+		//half w2a = CompareNormal(normal, normal2a) * 0.11453744493;
+		//half w2b = CompareNormal(normal, normal2b) * 0.11453744493;
+
+		//half3 result;
+		//result = w * col.rgb;
+		//result += w0a * col0a.rgb;
+		//result += w0b * col0b.rgb;
+		//result += w1a * col1a.rgb;
+		//result += w1b * col1b.rgb;
+		//result += w2a * col2a.rgb;
+		//result += w2b * col2b.rgb;
+
+		//result /= w + w0a + w0b + w1a + w1b + w2a + w2b;
+		//return fixed4(result, 1.0);
 	}
 
 	fixed4 frag_composite(v2f i) : SV_Target

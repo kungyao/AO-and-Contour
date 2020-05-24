@@ -26,12 +26,15 @@ public class AO : MonoBehaviour
         {
             float angle = UnityEngine.Random.Range(0.0f, 1.0f) * Mathf.PI * 2;
             float r = Mathf.Sqrt(UnityEngine.Random.Range(0.0f, 1.0f));
-            Vector3 v3 = new Vector3(r * Mathf.Cos(angle), r * Mathf.Sin(angle), UnityEngine.Random.Range(0.0f, 1.0f));
+            Vector3 v3 = new Vector3(
+                r * Mathf.Cos(angle), 
+                r * Mathf.Sin(angle), 
+                UnityEngine.Random.Range(0.0f, 1.0f));
             v3.Normalize();
             // v3 *= Random.Range(0.0f, 1.0f);
-            float scale = (float)i / mapSize;
-            scale = Mathf.Lerp(0.1f, 1.0f, scale * scale);
-            v3 *= scale;
+            //float scale = (float)i / mapSize;
+            //scale = Mathf.Lerp(0.1f, 1.0f, scale * scale);
+            //v3 *= scale;
             kernel.Add(v3);
         }
 
@@ -43,9 +46,14 @@ public class AO : MonoBehaviour
             float angle = UnityEngine.Random.Range(0.0f, 1.0f) * Mathf.PI * 2;
             float r = Mathf.Sqrt(UnityEngine.Random.Range(0.0f, 1.0f));
             //print(px + "   "+ py); 
-            Vector2 noise = new Vector2(r * Mathf.Cos(angle), r * Mathf.Sin(angle));
-            noise.Normalize();
-            noiseMap.SetPixel(px, py, new Color(noise.x, noise.y, 0, 0));
+            noiseMap.SetPixel(px, py, new Color(
+                r * Mathf.Cos(angle), 
+                r * Mathf.Sin(angle), 
+                0, 0));
+            //noiseMap.SetPixel(px, py, new Color(
+            //    UnityEngine.Random.Range(0.0f, 1.0f) * 2 - 1, 
+            //    UnityEngine.Random.Range(0.0f, 1.0f) * 2 - 1, 
+            //    0, 0));
             //print(noiseMap.GetPixel(px, py));
         }
         noiseMap.Apply();
