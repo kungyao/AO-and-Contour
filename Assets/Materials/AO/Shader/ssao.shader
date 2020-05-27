@@ -22,7 +22,7 @@
 	{
 		float4 vertex : SV_POSITION;
 		float2 uv : TEXCOORD0;
-		float3 scrPos : TEXCOORD1;
+		float3 viewRay : TEXCOORD1;
 	};
 
 	float4 _MainTex_TexelSize;
@@ -46,7 +46,9 @@
 		o.vertex = UnityObjectToClipPos(v.vertex);
 		// unity uv : 0 ~ 1
 		o.uv = v.uv;
-		o.scrPos = ComputeScreenPos(o.vertex);
+		float4 clipPos = float4(v.uv * 2 - 1.0, 1.0, 1.0);
+		float4 viewRay = mul(unity_CameraInvProjection, clipPos);
+		o.viewRay = viewRay.xyz / viewRay.w;
 		return o;
 	}
 
@@ -57,71 +59,57 @@
 
 	//https://learnopengl-cn.readthedocs.io/zh/latest/05%20Advanced%20Lighting/09%20SSAO/
 	//http://john-chapman-graphics.blogspot.com/
-	fixed4 frag_ao(v2f IN) : SV_Target
+	fixed4 frag_ao(v2f i) : SV_Target
 	{
-		fixed4 depth_normal = tex2D(_CameraDepthNormalsTexture, IN.scrPos.xy);
+		float4 depth_normal = tex2D(_CameraDepthNormalsTexture, i.uv);
 		float depth;
 		float3 normal;
+		//采样获得深度值和法线值
 		DecodeDepthNormal(depth_normal, depth, normal);
-		float3 randomVec = float3(tex2D(_RandomNoise, IN.scrPos.xy * _MainTex_TexelSize.zw ).xy, 0);
-		//float3 randomVec = float3(0, 0, 1);
 
 		// Get the depth value for this pixel
-		float z = depth;
-		//float z = (1 - Linear01Depth(depth)) * 2 - 1;
+		float z = 1.0;
 		// Get x/w and y/w from the viewport position
-		float x = IN.scrPos.x * 2 - 1;
-		float y = (1 - IN.scrPos.y) * 2 - 1;
+		float x = i.uv.x * 2 - 1;
+		float y = i.uv.y * 2 - 1;
 		float4 vProjectedPos = float4(x, y, z, 1.0f);
 		// Transform by the inverse projection matrix
 		float4 vPositionVS = mul(unity_CameraInvProjection, vProjectedPos);
 		// Divide by w to get the view-space position
 		float3 origin = vPositionVS.xyz / vPositionVS.w;
 
-		////可以得到正確的screen space座標
-		//float4 proj = mul(unity_CameraProjection, float4(origin, 1));
-		//proj /= proj.w;
-		//proj = (proj + 1) / 2;
-		//proj.y = 1 - proj.y;
-		//depth_normal = tex2D(_CameraDepthNormalsTexture, proj.xy);
+		//float3 viewPos = depth * i.viewRay;
+		float3 viewPos = origin * depth;
+		normal = normalize(normal) * float3(1, 1, -1);
 
-		// create ntb matrix
-		//normal = normal * 2 - 1;
-		float3 tangent = normalize(randomVec - normal * dot(randomVec, normal));
-		float3 bitangent = cross(normal, tangent);
-		float3x3 TBN;
-		TBN[0] = tangent;
-		TBN[1] = bitangent;
-		TBN[2] = normal;
-
-		//TBN = transpose(TBN);
+		//采样噪声图
+		float3 randvec = tex2D(_RandomNoise, i.uv * _MainTex_TexelSize.zw / 4).xyz;
+		//Gramm-Schimidt处理创建正交基
+		float3 tangent = normalize(randvec - normal * dot(randvec, normal));
+		float3 bitangent = cross(normal,tangent);
+		float3x3 TBN = float3x3(tangent, bitangent, normal);
 
 		float occlusion = 0.0;
-		for (int i = 0; i < _SampleSize; ++i)
+		for (int k = 0; k < _SampleSize; k++)
 		{
-			//float3 sp = mul(_Samples[i].xyz, TBN);
-			float3 sp = mul(TBN, _Samples[i].xyz);
-
-			sp = origin + sp * _Radius;
+			float3 sp = mul(_Samples[k].xyz, TBN);
+			sp = viewPos + sp * _Radius;
 
 			float4 rclipPos = mul(unity_CameraProjection, float4(sp, 1));
 			rclipPos /= rclipPos.w;
 			rclipPos = (rclipPos + 1) / 2;
-			rclipPos.y = 1 - rclipPos.y;
-			//rclipPos.xy = rclipPos.xy * 0.5 + 0.5;
 
 			float sampleDepth;
 			float3 sampleNormal;
 			float4 rcdn = tex2D(_CameraDepthNormalsTexture, rclipPos.xy);
 			DecodeDepthNormal(rcdn, sampleDepth, sampleNormal);
 
-			float rangeCheck = abs(depth - sampleDepth) < _Radius ? 1.0 : 0.0;
-			occlusion += (sampleDepth <= sp.z * _ProjectionParams.z ? 1.0 : 0.0) * rangeCheck;
+			//1.range check & accumulate
+			float rangeCheck = smoothstep(0.0, 1.0, _Radius / abs(sampleDepth - depth));
+			occlusion += (sampleDepth >= depth ? 1.0 : 0.0) * rangeCheck; //
 		}
 
-		occlusion = 1.0 - occlusion / _SampleSize;
-		occlusion = max(0.0, occlusion);
-
+		occlusion = occlusion / _SampleSize;
 		return occlusion;
 	}
 
